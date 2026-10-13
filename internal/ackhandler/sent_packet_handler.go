@@ -1185,8 +1185,8 @@ func (h *sentPacketHandler) SetCongestionControl(
 	cc := newCC(congestionExt.ByteCount(initialMaxDatagramSize))
 	cc.SetRTTStatsProvider(h.rttStats)
 	if ccEx, ok := cc.(congestionExt.CongestionControlEx); ok {
-		h.congestion = &ccAdapterEx{ccEx}
+		h.congestion = &ccAdapterEx{CC: ccEx, connStats: h.connStats}
 	} else {
-		h.congestion = &ccAdapter{cc}
+		h.congestion = &ccAdapter{CC: cc, connStats: h.connStats}
 	}
 }

@@ -64,11 +64,15 @@ func (c *exCC) OnCongestionEventEx(priorInFlight congestion.ByteCount, _ monotim
 }
 
 func newSentPacketHandlerForCongestionControlTest(rttStats *utils.RTTStats) SentPacketHandler {
+	return newSentPacketHandlerWithStats(rttStats, &utils.ConnectionStats{})
+}
+
+func newSentPacketHandlerWithStats(rttStats *utils.RTTStats, connStats *utils.ConnectionStats) SentPacketHandler {
 	return NewSentPacketHandler(
 		0,
 		1200,
 		rttStats,
-		&utils.ConnectionStats{},
+		connStats,
 		true,
 		false,
 		nil,
@@ -176,4 +180,25 @@ func TestSentPacketHandlerSuppliedCongestionControlSurvivesMigration(t *testing.
 	require.Len(t, made[0].sent, 2)
 	require.Len(t, made[1].sent, 3)
 	require.Equal(t, protocol.ByteCount(42*1200), sph.(*sentPacketHandler).congestion.GetCongestionWindow())
+}
+
+// The built-in sender counts lost packets for Conn.ConnectionStats. With a
+// supplied controller the count has to keep working.
+func TestSentPacketHandlerSuppliedCongestionControlCountsLoss(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cc   congestion.CongestionControl
+	}{{"with events", &exCC{}}, {"without events", &plainCC{}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var connStats utils.ConnectionStats
+			sph := newSentPacketHandlerWithStats(utils.NewRTTStats(), &connStats)
+			sph.SetCongestionControl(func(congestion.ByteCount) congestion.CongestionControl { return tc.cc }, 1200)
+			now := monotime.Now()
+			pns := send1RTTPackets(sph, now, 5)
+			_, err := sph.ReceivedAck(&wire.AckFrame{AckRanges: ackRanges(pns[4])}, protocol.Encryption1RTT, now.Add(10*time.Millisecond))
+			require.NoError(t, err)
+			require.Equal(t, uint64(2), connStats.PacketsLost.Load())
+			require.Equal(t, uint64(2400), connStats.BytesLost.Load())
+		})
+	}
 }
