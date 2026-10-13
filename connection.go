@@ -330,6 +330,9 @@ var newConnection = func(
 		s.qlogger,
 		s.logger,
 	)
+	if s.config.CongestionControl != nil {
+		s.sentPacketHandler.SetCongestionControl(s.config.CongestionControl, s.config.initialPacketSize())
+	}
 	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(s.config.initialPacketSize())))
 	statelessResetToken := statelessResetter.GetStatelessResetToken(srcConnID)
 	params := &wire.TransportParameters{
@@ -468,6 +471,9 @@ var newClientConnection = func(
 		s.qlogger,
 		s.logger,
 	)
+	if s.config.CongestionControl != nil {
+		s.sentPacketHandler.SetCongestionControl(s.config.CongestionControl, s.config.initialPacketSize())
+	}
 	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(s.config.initialPacketSize())))
 	oneRTTStream := newCryptoStream()
 	params := &wire.TransportParameters{
