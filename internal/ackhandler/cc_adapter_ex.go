@@ -5,6 +5,7 @@ import (
 	cgInternal "github.com/quic-go/quic-go/internal/congestion"
 	"github.com/quic-go/quic-go/internal/monotime"
 	"github.com/quic-go/quic-go/internal/protocol"
+	"github.com/quic-go/quic-go/internal/utils"
 )
 
 var (
@@ -14,6 +15,9 @@ var (
 
 type ccAdapterEx struct {
 	CC congestion.CongestionControlEx
+	// connStats is counted here because the built-in sender, which counts lost
+	// packets for Conn.ConnectionStats, is not in use.
+	connStats *utils.ConnectionStats
 }
 
 func (a *ccAdapterEx) TimeUntilSend(bytesInFlight protocol.ByteCount) monotime.Time {
@@ -41,6 +45,8 @@ func (a *ccAdapterEx) OnPacketAcked(number protocol.PacketNumber, ackedBytes pro
 }
 
 func (a *ccAdapterEx) OnCongestionEvent(number protocol.PacketNumber, lostBytes protocol.ByteCount, priorInFlight protocol.ByteCount) {
+	a.connStats.PacketsLost.Add(1)
+	a.connStats.BytesLost.Add(uint64(lostBytes))
 	a.CC.OnCongestionEvent(congestion.PacketNumber(number), congestion.ByteCount(lostBytes), congestion.ByteCount(priorInFlight))
 }
 
