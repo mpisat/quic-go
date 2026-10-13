@@ -592,3 +592,32 @@ func TestCubicSenderLimitCwndIncreaseInCongestionAvoidance(t *testing.T) {
 	testSender.AckNPackets(2)
 	require.Equal(t, savedCwnd+maxDatagramSize, sender.GetCongestionWindow())
 }
+
+// moqdelivery: a path whose delay rises by a few milliseconds once media flows
+// (measured: 24 ms on a 220 ms path, no loss) must not end slow start below the
+// stream's bitrate. Only loss ends it.
+func TestCubicSenderRisingDelayDoesNotEndSlowStart(t *testing.T) {
+	sender := newTestCubicSender(false)
+	sender.rttStats.UpdateRTT(220*time.Millisecond, 0)
+	for range 4 {
+		sent := sender.SendAvailableSendWindow()
+		for range sent {
+			sender.rttStats.UpdateRTT(244*time.Millisecond, 0)
+			sender.sender.MaybeExitSlowStart()
+			sender.ackedPacketNumber++
+			sender.sender.OnPacketAcked(sender.ackedPacketNumber, maxDatagramSize, sender.bytesInFlight, sender.clock.Now())
+			sender.bytesInFlight -= maxDatagramSize
+		}
+		sender.clock.Advance(244 * time.Millisecond)
+	}
+	require.True(t, sender.sender.InSlowStart())
+}
+
+func TestCubicSenderLossStillEndsSlowStart(t *testing.T) {
+	sender := newTestCubicSender(false)
+	sender.SendAvailableSendWindow()
+	sender.AckNPackets(2)
+	require.True(t, sender.sender.InSlowStart())
+	sender.LoseNPackets(1)
+	require.False(t, sender.sender.InSlowStart())
+}

@@ -172,11 +172,12 @@ func (c *cubicSender) GetCongestionWindow() protocol.ByteCount {
 }
 
 func (c *cubicSender) MaybeExitSlowStart() {
-	if c.InSlowStart() &&
-		c.hybridSlowStart.ShouldExitSlowStart(c.rttStats.LatestRTT(), c.rttStats.MinRTT(), c.GetCongestionWindow()/c.maxDatagramSize) {
-		// exit slow start
-		c.slowStartThreshold = c.congestionWindow
-		c.maybeQlogStateChange(qlog.CongestionStateCongestionAvoidance)
+	// moqdelivery: receive rounds are still tracked, but a rise in delay no
+	// longer ends slow start. On a long path the delay rises a few milliseconds
+	// as soon as media flows, which froze the window below a live stream's
+	// bitrate with no loss. Loss still ends slow start in OnCongestionEvent.
+	if c.InSlowStart() {
+		c.hybridSlowStart.ShouldExitSlowStart(c.rttStats.LatestRTT(), c.rttStats.MinRTT(), c.GetCongestionWindow()/c.maxDatagramSize)
 	}
 }
 
