@@ -1,6 +1,7 @@
 package ackhandler
 
 import (
+	"github.com/quic-go/quic-go/congestion"
 	"github.com/quic-go/quic-go/internal/monotime"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/internal/wire"
@@ -36,4 +37,9 @@ type SentPacketHandler interface {
 	OnLossDetectionTimeout(now monotime.Time) error
 
 	MigratedPath(now monotime.Time, initialMaxPacketSize protocol.ByteCount)
+
+	// SetCongestionControl replaces the built-in congestion controller with one
+	// made by newCC, now and again after every path migration.
+	// It must be called before the first packet is sent.
+	SetCongestionControl(newCC func(initialMaxPacketSize congestion.ByteCount) congestion.CongestionControl, initialMaxPacketSize protocol.ByteCount)
 }

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/quic-go/quic-go/congestion"
 	"github.com/quic-go/quic-go/internal/handshake"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/qlogwriter"
@@ -183,6 +184,12 @@ type Config struct {
 	EnableStreamResetPartialDelivery bool
 
 	Tracer func(ctx context.Context, isClient bool, connID ConnectionID) qlogwriter.Trace
+
+	// CongestionControl, if set, is called to make the congestion controller of
+	// each connection, in place of the built-in one. It is called when the
+	// connection is created and again after every path migration, with the
+	// packet size the connection starts out with on that path.
+	CongestionControl func(initialPacketSize congestion.ByteCount) congestion.CongestionControl
 }
 
 // ClientInfo contains information about an incoming connection attempt.
