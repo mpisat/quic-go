@@ -153,6 +153,12 @@ func (s *Stream) TryWriteAll(p []byte) error {
 	return s.sendStr.TryWriteAll(p)
 }
 
+// TryWriteAllAndClose queues data and the FIN atomically.
+// See [SendStream.TryWriteAllAndClose] for more details.
+func (s *Stream) TryWriteAllAndClose(p []byte) error {
+	return s.sendStr.TryWriteAllAndClose(p)
+}
+
 // SetReliableBoundary marks the data written to this stream so far as reliable.
 // It is valid to call this function multiple times, thereby increasing the reliable size.
 // It only has an effect if the peer enabled support for the RESET_STREAM_AT extension,
