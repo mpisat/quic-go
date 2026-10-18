@@ -164,10 +164,57 @@ func (s *SendStream) TryWriteAll(p []byte) error {
 	return err
 }
 
+// TryWriteAllAndClose queues data and the FIN together, if all of the data
+// can be queued immediately, so that the FIN is sent in the same STREAM frame
+// as the end of the data. TryWriteAll followed by Close cannot promise that:
+// the packer may take the data in between, and the FIN then follows in an
+// empty STREAM frame of its own. Some receivers (Safari 27) do not return a
+// stream's flow-control credit when its FIN arrives on its own.
+// Like TryWriteAll, it doesn't block for flow control credit and doesn't
+// respect the write deadline. If the entire slice can't be queued
+// immediately, it queues nothing, leaves the stream open and returns
+// [ErrWouldBlock]. It must not be called after Close or CancelWrite, nor
+// concurrently with Write.
+func (s *SendStream) TryWriteAllAndClose(p []byte) error {
+	select {
+	case s.writeOnce <- struct{}{}:
+		defer func() { <-s.writeOnce }()
+	default:
+		return ErrWouldBlock
+	}
+
+	isNewlyCompleted, _, err := s.tryWriteAllAndClose(p)
+	if isNewlyCompleted {
+		s.sender.onStreamCompleted(s.streamID)
+	}
+	if err != nil {
+		return err
+	}
+	s.sender.onHasStreamData(s.streamID, s) // the data and the FIN, must be called without holding the mutex
+	s.ctxCancel(nil)
+	return nil
+}
+
+func (s *SendStream) tryWriteAllAndClose(p []byte) (bool /* is newly completed */, bool /* has data */, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	isNewlyCompleted, hasData, err := s.tryWriteAllLocked(p)
+	if err != nil {
+		return isNewlyCompleted, hasData, err
+	}
+	s.finishedWriting = true
+	return s.isNewlyCompleted(), hasData, nil
+}
+
 func (s *SendStream) tryWriteAll(p []byte) (bool /* is newly completed */, bool /* has data */, error) {
 	// This might wait briefly while a packet is dequeuing stream data.
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	return s.tryWriteAllLocked(p)
+}
+
+func (s *SendStream) tryWriteAllLocked(p []byte) (bool /* is newly completed */, bool /* has data */, error) {
 
 	if s.resetErr != nil {
 		s.cancellationFlagged = true

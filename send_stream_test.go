@@ -273,6 +273,56 @@ func TestSendStreamTryWriteAll(t *testing.T) {
 	)
 }
 
+func TestSendStreamTryWriteAllAndClose(t *testing.T) {
+	const streamID protocol.StreamID = 42
+	mockCtrl := gomock.NewController(t)
+	mockFC := newTestStreamFlowControllerWithSendWindow(streamID, protocol.MaxByteCount)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newSendStream(context.Background(), streamID, mockSender, mockFC, false)
+
+	mockSender.EXPECT().onHasStreamData(streamID, str)
+	data := []byte("foobar")
+	require.NoError(t, str.TryWriteAllAndClose(data))
+	data[0] = 'x' // make sure the data was copied
+	require.ErrorIs(t, str.Context().Err(), context.Canceled)
+	_, err := str.Write([]byte("more"))
+	require.ErrorContains(t, err, "write on closed stream")
+
+	// The FIN is in the frame that carries the data, not in a frame of its own.
+	frame, _, hasMore := str.popStreamFrame(protocol.MaxByteCount, protocol.Version1)
+	require.False(t, hasMore)
+	require.EqualExportedValues(t,
+		&wire.StreamFrame{StreamID: streamID, Data: []byte("foobar"), Fin: true, DataLenPresent: true},
+		frame.Frame,
+	)
+	frame, _, hasMore = str.popStreamFrame(protocol.MaxByteCount, protocol.Version1)
+	require.Nil(t, frame.Frame)
+	require.False(t, hasMore)
+}
+
+func TestSendStreamTryWriteAllAndCloseFlowControlBlocked(t *testing.T) {
+	const streamID protocol.StreamID = 42
+	mockCtrl := gomock.NewController(t)
+	mockFC := newTestStreamFlowControllerWithSendWindow(streamID, 3)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newSendStream(context.Background(), streamID, mockSender, mockFC, false)
+
+	// Nothing is queued and the stream stays open.
+	require.ErrorIs(t, str.TryWriteAllAndClose([]byte("foobar")), ErrWouldBlock)
+	require.NoError(t, str.Context().Err())
+	frame, _, _ := str.popStreamFrame(protocol.MaxByteCount, protocol.Version1)
+	require.Nil(t, frame.Frame)
+
+	mockSender.EXPECT().onHasStreamData(streamID, str)
+	require.NoError(t, str.TryWriteAllAndClose([]byte("foo")))
+	frame, _, hasMore := str.popStreamFrame(protocol.MaxByteCount, protocol.Version1)
+	require.False(t, hasMore)
+	require.EqualExportedValues(t,
+		&wire.StreamFrame{StreamID: streamID, Data: []byte("foo"), Fin: true, DataLenPresent: true},
+		frame.Frame,
+	)
+}
+
 func TestSendStreamTryWriteAllFlowControlBlocked(t *testing.T) {
 	const streamID protocol.StreamID = 42
 	mockCtrl := gomock.NewController(t)
