@@ -75,6 +75,7 @@ func newSentPacketHandlerWithStats(rttStats *utils.RTTStats, connStats *utils.Co
 		connStats,
 		true,
 		false,
+		0,
 		nil,
 		protocol.PerspectiveServer,
 		nil,

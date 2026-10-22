@@ -112,6 +112,8 @@ type sentPacketHandler struct {
 	// The number of PTO probe packets that should be sent.
 	// Only applies to the application-data packet number space.
 	numProbesToSend int
+	// If non-zero, the backed-off PTO is truncated to max(maxPTOBackoff, unscaled PTO).
+	maxPTOBackoff time.Duration
 
 	// The alarm timeout
 	alarm alarmTimer
@@ -137,6 +139,7 @@ func NewSentPacketHandler(
 	connStats *utils.ConnectionStats,
 	clientAddressValidated bool,
 	enableECN bool,
+	maxPTOBackoff time.Duration,
 	ignorePacketsBelow func(protocol.PacketNumber),
 	pers protocol.Perspective,
 	qlogger qlogwriter.Recorder,
@@ -163,6 +166,7 @@ func NewSentPacketHandler(
 		rttStats:                       rttStats,
 		connStats:                      connStats,
 		congestion:                     congestion,
+		maxPTOBackoff:                  maxPTOBackoff,
 		ignorePacketsBelow:             ignorePacketsBelow,
 		perspective:                    pers,
 		qlogger:                        qlogger,
@@ -689,9 +693,14 @@ func (h *sentPacketHandler) getLossTimeAndSpace() (monotime.Time, protocol.Encry
 }
 
 func (h *sentPacketHandler) getScaledPTO(includeMaxAckDelay bool) time.Duration {
-	pto := h.rttStats.PTO(includeMaxAckDelay) << h.ptoCount
+	unscaledPTO := h.rttStats.PTO(includeMaxAckDelay)
+	pto := unscaledPTO << h.ptoCount
 	if pto > maxPTODuration || pto <= 0 {
-		return maxPTODuration
+		pto = maxPTODuration
+	}
+	// The optional cap truncates the backoff further, but never below the unscaled PTO.
+	if h.maxPTOBackoff > 0 {
+		pto = min(pto, max(h.maxPTOBackoff, unscaledPTO))
 	}
 	return pto
 }

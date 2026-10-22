@@ -190,6 +190,17 @@ type Config struct {
 	// connection is created and again after every path migration, with the
 	// packet size the connection starts out with on that path.
 	CongestionControl func(initialPacketSize congestion.ByteCount) congestion.CongestionControl
+
+	// MaxPTOBackoff caps the exponential backoff of the probe timeout (PTO).
+	// If 0 (the default), the PTO doubles with every consecutive timeout, up to 60 seconds.
+	// If set, the backed-off PTO is truncated to MaxPTOBackoff, but never to less than the
+	// PTO without backoff: probe packets are never sent faster than once per unscaled PTO,
+	// and on a path whose unscaled PTO is larger than MaxPTOBackoff, the PTO stays at its
+	// unscaled value. A value below 60 seconds departs from RFC 9002, section 6.2.1 (the
+	// backoff MUST double at each expiry) and RFC 8961, section 4 (a maximum RTO MUST NOT
+	// be less than 60 seconds).
+	// Negative values are treated as 0.
+	MaxPTOBackoff time.Duration
 }
 
 // ClientInfo contains information about an incoming connection attempt.

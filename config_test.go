@@ -128,6 +128,8 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			f.Set(reflect.ValueOf(true))
 		case "EnableStreamResetPartialDelivery":
 			f.Set(reflect.ValueOf(true))
+		case "MaxPTOBackoff":
+			f.Set(reflect.ValueOf(time.Second))
 		default:
 			t.Fatalf("all fields must be accounted for, but saw unknown field %q", fn)
 		}
@@ -192,8 +194,10 @@ func TestConfigZeroLimits(t *testing.T) {
 	config := &Config{
 		MaxIncomingStreams:    -1,
 		MaxIncomingUniStreams: -1,
+		MaxPTOBackoff:         -time.Second,
 	}
 	c := populateConfig(config)
 	require.Zero(t, c.MaxIncomingStreams)
 	require.Zero(t, c.MaxIncomingUniStreams)
+	require.Zero(t, c.MaxPTOBackoff)
 }

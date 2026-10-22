@@ -104,6 +104,10 @@ func populateConfig(config *Config) *Config {
 	if initialPacketSize == 0 {
 		initialPacketSize = protocol.InitialPacketSize
 	}
+	maxPTOBackoff := config.MaxPTOBackoff
+	if maxPTOBackoff < 0 {
+		maxPTOBackoff = 0
+	}
 
 	return &Config{
 		GetConfigForClient:               config.GetConfigForClient,
@@ -126,5 +130,6 @@ func populateConfig(config *Config) *Config {
 		Allow0RTT:                        config.Allow0RTT,
 		Tracer:                           config.Tracer,
 		CongestionControl:                config.CongestionControl,
+		MaxPTOBackoff:                    maxPTOBackoff,
 	}
 }
