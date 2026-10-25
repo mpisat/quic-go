@@ -233,3 +233,76 @@ func TestSentPacketHandlerSuppliedCongestionControlCountsLoss(t *testing.T) {
 		})
 	}
 }
+
+// A lost path MTU probe says nothing about congestion. The built-in sender is
+// not told about it (OnCongestionEvent), and a supplied controller must not see
+// it in OnCongestionEventEx either. The probe's bytes leave the prior bytes in
+// flight passed with that event, so that priorInFlight minus the acknowledged
+// and lost bytes stays the bytes in flight after the event.
+func TestSentPacketHandlerSuppliedCongestionControlIgnoresLostMTUProbes(t *testing.T) {
+	const probeSize = 1400
+	sendPacket := func(sph SentPacketHandler, now monotime.Time, isMTUProbe bool) protocol.PacketNumber {
+		var packets packetTracker
+		pn := sph.PopPacketNumber(protocol.PacketNumberSpaceAppData)
+		size := protocol.ByteCount(1200)
+		if isMTUProbe {
+			size = probeSize
+		}
+		sph.SentPacket(now, pn, protocol.InvalidPacketNumber, nil, []Frame{packets.NewPingFrame(pn)}, protocol.Encryption1RTT, protocol.ECNNon, size, isMTUProbe, false)
+		return pn
+	}
+
+	t.Run("packet and time threshold", func(t *testing.T) {
+		sph := newSentPacketHandlerForCongestionControlTest(utils.NewRTTStats())
+		cc := &exCC{}
+		sph.SetCongestionControl(func(congestion.ByteCount) congestion.CongestionControl { return cc }, 1200)
+
+		now := monotime.Now()
+		var pns []protocol.PacketNumber
+		for i := range 5 {
+			pns = append(pns, sendPacket(sph, now, i == 0 || i == 3))
+		}
+
+		// Acknowledging packet 4 declares packets 0 (the probe) and 1 lost.
+		ackTime := now.Add(10 * time.Millisecond)
+		_, err := sph.ReceivedAck(&wire.AckFrame{AckRanges: ackRanges(pns[4])}, protocol.Encryption1RTT, ackTime)
+		require.NoError(t, err)
+		require.Equal(t, []congestion.PacketNumber{congestion.PacketNumber(pns[1])}, cc.lost)
+		require.Equal(t, []congestionEvent{{
+			priorInFlight: 3*1200 + probeSize,
+			acked:         []congestion.AckedPacketInfo{{PacketNumber: congestion.PacketNumber(pns[4]), BytesAcked: 1200, ReceivedTime: ackTime}},
+			lost:          []congestion.LostPacketInfo{{PacketNumber: congestion.PacketNumber(pns[1]), BytesLost: 1200}},
+		}}, cc.events)
+
+		// The loss timer declares packets 2 and 3 (the probe) lost.
+		require.NoError(t, sph.OnLossDetectionTimeout(sph.GetLossDetectionTimeout()))
+		require.Equal(t, []congestion.PacketNumber{congestion.PacketNumber(pns[1]), congestion.PacketNumber(pns[2])}, cc.lost)
+		require.Len(t, cc.events, 2)
+		require.Equal(t, congestionEvent{
+			priorInFlight: 1200,
+			lost:          []congestion.LostPacketInfo{{PacketNumber: congestion.PacketNumber(pns[2]), BytesLost: 1200}},
+		}, cc.events[1])
+	})
+
+	t.Run("only the probe is lost", func(t *testing.T) {
+		sph := newSentPacketHandlerForCongestionControlTest(utils.NewRTTStats())
+		cc := &exCC{}
+		sph.SetCongestionControl(func(congestion.ByteCount) congestion.CongestionControl { return cc }, 1200)
+
+		// The probe is sent first, so its loss deadline comes first.
+		now := monotime.Now()
+		sendPacket(sph, now, true)
+		sendPacket(sph, now.Add(time.Millisecond), false)
+		pn := sendPacket(sph, now.Add(time.Millisecond), false)
+		_, err := sph.ReceivedAck(&wire.AckFrame{AckRanges: ackRanges(pn)}, protocol.Encryption1RTT, now.Add(21*time.Millisecond))
+		require.NoError(t, err)
+		require.Len(t, cc.events, 1)
+		require.Empty(t, cc.events[0].lost)
+
+		// The loss timer declares only the probe lost: no congestion event.
+		require.NoError(t, sph.OnLossDetectionTimeout(sph.GetLossDetectionTimeout()))
+		require.Empty(t, cc.lost)
+		require.Len(t, cc.events, 1)
+		require.Equal(t, protocol.ByteCount(1200), sph.(*sentPacketHandler).bytesInFlight)
+	})
+}

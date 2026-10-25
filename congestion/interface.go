@@ -58,6 +58,13 @@ type CongestionControl interface {
 
 // A CongestionControlEx is additionally told, once per received ACK or loss
 // timer, which packets were acknowledged and which were declared lost.
+//
+// A lost path MTU probe is not a sign of congestion. As with OnCongestionEvent,
+// it is never reported as lost: it is not in lostPackets, and its bytes are
+// already taken out of priorInFlight, so that priorInFlight minus the bytes in
+// ackedPackets and lostPackets is the bytes in flight after the event. A loss
+// timer that declares only MTU probes lost calls no OnCongestionEventEx at all.
+// An acknowledged MTU probe is reported in ackedPackets like any other packet.
 type CongestionControlEx interface {
 	CongestionControl
 	OnCongestionEventEx(priorInFlight ByteCount, eventTime monotime.Time, ackedPackets []AckedPacketInfo, lostPackets []LostPacketInfo)

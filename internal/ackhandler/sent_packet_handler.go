@@ -113,6 +113,11 @@ type sentPacketHandler struct {
 	// only filled if the congestion controller is a congestion.SendAlgorithmEx
 	ackedPacketsInfo []congestionExt.AckedPacketInfo
 	lostPacketsInfo  []congestionExt.LostPacketInfo
+	// lostMTUProbeBytes are the bytes in flight of the path MTU probes that the
+	// last detectLostPackets call declared lost. These probes are not in
+	// lostPacketsInfo, so their bytes are taken out of the priorInFlight passed
+	// with OnCongestionEventEx.
+	lostMTUProbeBytes protocol.ByteCount
 
 	bytesInFlight protocol.ByteCount
 
@@ -515,7 +520,7 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 	if len(ackedPackets) == 0 {
 		if timeThresholdIncreased && congestionEx != nil && len(h.lostPacketsInfo) != 0 {
 			// detectLostPackets ran above and declared packets lost without a newly acknowledged packet
-			congestionEx.OnCongestionEventEx(priorInFlight, rcvTime, nil, h.lostPacketsInfo)
+			congestionEx.OnCongestionEventEx(priorInFlight-h.lostMTUProbeBytes, rcvTime, nil, h.lostPacketsInfo)
 		}
 		if len(spuriousLosses) > 0 && h.qlogger != nil {
 			h.qlogMetricsUpdated()
@@ -549,7 +554,7 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 	}
 
 	if congestionEx != nil && (len(h.ackedPacketsInfo) != 0 || len(h.lostPacketsInfo) != 0) {
-		congestionEx.OnCongestionEventEx(priorInFlight, rcvTime, h.ackedPacketsInfo, h.lostPacketsInfo)
+		congestionEx.OnCongestionEventEx(priorInFlight-h.lostMTUProbeBytes, rcvTime, h.ackedPacketsInfo, h.lostPacketsInfo)
 	}
 
 	// After this point, we must not use ackedPackets any longer!
@@ -909,6 +914,7 @@ func countPacketNumbers(pns []protocol.PacketNumber, lower, upper protocol.Packe
 func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protocol.EncryptionLevel) {
 	_, collectLost := h.congestion.(congestion.SendAlgorithmEx)
 	h.lostPacketsInfo = h.lostPacketsInfo[:0]
+	h.lostMTUProbeBytes = 0
 	pnSpace := h.getPacketNumberSpace(encLevel.PacketNumberSpace())
 	pnSpace.lossTime = 0
 	space := encLevel.PacketNumberSpace()
@@ -997,17 +1003,22 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 			}
 			h.hist.DeclareLost(pn)
 			if !p.isPathProbePacket && p.IsAckEliciting() {
+				// A lost path MTU probe is not a sign of congestion: no congestion
+				// controller, built-in or supplied, is told about it.
+				if p.IsPathMTUProbePacket && p.includedInBytesInFlight {
+					h.lostMTUProbeBytes += p.Length
+				}
 				// the bytes in flight need to be reduced no matter if the frames in this packet will be retransmitted
 				h.removeFromBytesInFlight(p)
 				h.queueFramesForRetransmission(p)
 				if !p.IsPathMTUProbePacket {
 					h.congestion.OnCongestionEvent(pn, p.Length, priorInFlight)
-				}
-				if collectLost {
-					h.lostPacketsInfo = append(h.lostPacketsInfo, congestionExt.LostPacketInfo{
-						PacketNumber: congestionExt.PacketNumber(pn),
-						BytesLost:    congestionExt.ByteCount(p.Length),
-					})
+					if collectLost {
+						h.lostPacketsInfo = append(h.lostPacketsInfo, congestionExt.LostPacketInfo{
+							PacketNumber: congestionExt.PacketNumber(pn),
+							BytesLost:    congestionExt.ByteCount(p.Length),
+						})
+					}
 				}
 				if encLevel == protocol.Encryption1RTT && h.ecnTracker != nil {
 					h.ecnTracker.LostPacket(pn)
@@ -1047,7 +1058,7 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 		priorInFlight := h.bytesInFlight
 		h.detectLostPackets(now, encLevel)
 		if congestionEx, ok := h.congestion.(congestion.SendAlgorithmEx); ok && len(h.lostPacketsInfo) != 0 {
-			congestionEx.OnCongestionEventEx(priorInFlight, now, nil, h.lostPacketsInfo)
+			congestionEx.OnCongestionEventEx(priorInFlight-h.lostMTUProbeBytes, now, nil, h.lostPacketsInfo)
 		}
 		return nil
 	}
