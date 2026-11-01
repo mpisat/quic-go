@@ -945,9 +945,10 @@ func testSentPacketHandlerPTO(t *testing.T, encLevel protocol.EncryptionLevel, p
 	require.True(t, sph.QueueProbePacket(encLevel))
 	// there are only two ack-eliciting packets that could be queued
 	require.False(t, sph.QueueProbePacket(encLevel))
-	// Queueing probe packets currently works by declaring them lost.
-	// We shouldn't do this, but this is how the code is currently written.
+	// Queueing probe packets sends their frames again (the frames' OnLost),
+	// but leaves the packets in flight: a PTO doesn't declare them lost.
 	require.Equal(t, pns[:3], packets.Lost)
+	require.Equal(t, protocol.ByteCount(3000), sph.(*sentPacketHandler).bytesInFlight)
 	packets.Lost = packets.Lost[:0]
 
 	eventRecorder.Clear()
@@ -1018,7 +1019,9 @@ func testSentPacketHandlerPTO(t *testing.T, encLevel protocol.EncryptionLevel, p
 	require.NoError(t, err)
 	require.Equal(t, []protocol.PacketNumber{pns[7]}, packets.Acked)
 	require.Equal(t, []protocol.PacketNumber{pns[4], pns[6]}, packets.Lost)
-	require.Len(t, eventRecorder.Events(qlog.PacketLost{}), 2)
+	// Packets 0-2 stayed in flight after the first PTO; loss detection declares
+	// them lost now, together with 4 and 6. Their frames were already queued.
+	require.Len(t, eventRecorder.Events(qlog.PacketLost{}), 5)
 	require.Equal(t,
 		[]qlogwriter.Event{
 			qlog.PTOCountUpdated{PTOCount: 0},

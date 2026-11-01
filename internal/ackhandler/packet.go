@@ -25,6 +25,10 @@ type packet struct {
 
 	includedInBytesInFlight bool
 	isPathProbePacket       bool
+	// framesQueued is set when a PTO probe has queued the packet's frames for
+	// retransmission. The packet stays in flight, ack-eliciting and outstanding
+	// until an ACK or loss detection settles it.
+	framesQueued bool
 }
 
 func (p *packet) Outstanding() bool {
@@ -32,7 +36,7 @@ func (p *packet) Outstanding() bool {
 }
 
 func (p *packet) IsAckEliciting() bool {
-	return len(p.StreamFrames) > 0 || len(p.Frames) > 0
+	return len(p.StreamFrames) > 0 || len(p.Frames) > 0 || p.framesQueued
 }
 
 var packetPool = sync.Pool{New: func() any { return &packet{} }}
@@ -48,6 +52,7 @@ func getPacket() *packet {
 	p.IsPathMTUProbePacket = false
 	p.includedInBytesInFlight = false
 	p.isPathProbePacket = false
+	p.framesQueued = false
 	return p
 }
 

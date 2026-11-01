@@ -1121,20 +1121,24 @@ func (h *sentPacketHandler) isAmplificationLimited() bool {
 
 func (h *sentPacketHandler) QueueProbePacket(encLevel protocol.EncryptionLevel) bool {
 	pnSpace := h.getPacketNumberSpace(encLevel)
-	pn, p := pnSpace.history.FirstOutstanding()
-	if p == nil {
-		return false
+	for _, p := range pnSpace.history.Packets() {
+		if !p.Outstanding() || p.framesQueued {
+			continue
+		}
+		// A PTO does not mean that the packet was lost (RFC 9002, section 6.2.4).
+		// Only its frames are sent again. The packet stays in flight, so that an ACK
+		// or loss detection settles it and the congestion controller learns its end.
+		h.queueFramesForRetransmission(p)
+		p.framesQueued = true
+		return true
 	}
-	// TODO: don't declare the packet lost here.
-	// Keep track of acknowledged frames instead.
-	// Call DeclareLost before queueFramesForRetransmission, which clears the packet's frames.
-	pnSpace.history.DeclareLost(pn)
-	h.removeFromBytesInFlight(p)
-	h.queueFramesForRetransmission(p)
-	return true
+	return false
 }
 
 func (h *sentPacketHandler) queueFramesForRetransmission(p *packet) {
+	if p.framesQueued { // a PTO probe already queued them
+		return
+	}
 	if len(p.Frames) == 0 && len(p.StreamFrames) == 0 {
 		panic("no frames")
 	}

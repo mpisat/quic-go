@@ -275,3 +275,68 @@ func TestSentPacketHandlerSuppliedCongestionControlIgnoresLostMTUProbes(t *testi
 		require.Equal(t, protocol.ByteCount(1200), sph.(*sentPacketHandler).bytesInFlight)
 	})
 }
+
+// A PTO does not mean that a packet was lost (RFC 9002, section 6.2.4): the
+// packets whose frames QueueProbePacket sends again stay in flight. A supplied
+// controller has to learn each one's end like any other packet's: acknowledged
+// when an ACK for it arrives, lost when loss detection declares it lost.
+func TestSentPacketHandlerSuppliedCongestionControlAfterPTO(t *testing.T) {
+	setup := func(t *testing.T) (*sentPacketHandler, *exCC, []protocol.PacketNumber, monotime.Time) {
+		t.Helper()
+		sph := newSentPacketHandlerForCongestionControlTest(utils.NewRTTStats()).(*sentPacketHandler)
+		cc := &exCC{}
+		sph.SetCongestionControl(func(congestion.ByteCount) congestion.CongestionControl { return cc }, 1200)
+		now := monotime.Now()
+		sph.DropPackets(protocol.EncryptionInitial, now)
+		sph.DropPackets(protocol.EncryptionHandshake, now)
+		pns := send1RTTPackets(sph, now, 3)
+
+		timeout := sph.GetLossDetectionTimeout()
+		require.False(t, timeout.IsZero())
+		require.NoError(t, sph.OnLossDetectionTimeout(timeout))
+		require.Equal(t, SendPTOAppData, sph.SendMode(timeout))
+		require.True(t, sph.QueueProbePacket(protocol.Encryption1RTT))
+		require.True(t, sph.QueueProbePacket(protocol.Encryption1RTT))
+		// the PTO itself reports nothing and takes nothing out of flight
+		require.Empty(t, cc.lost)
+		require.Empty(t, cc.events)
+		require.Equal(t, protocol.ByteCount(3*1200), sph.bytesInFlight)
+		return sph, cc, pns, timeout
+	}
+
+	t.Run("acknowledged after the probe", func(t *testing.T) {
+		sph, cc, pns, timeout := setup(t)
+		ackTime := timeout.Add(time.Millisecond)
+		_, err := sph.ReceivedAck(&wire.AckFrame{AckRanges: ackRanges(pns[0], pns[1], pns[2])}, protocol.Encryption1RTT, ackTime)
+		require.NoError(t, err)
+		require.Equal(t, []congestion.PacketNumber{congestion.PacketNumber(pns[0]), congestion.PacketNumber(pns[1]), congestion.PacketNumber(pns[2])}, cc.acked)
+		require.Empty(t, cc.lost)
+		require.Equal(t, []congestionEvent{{
+			priorInFlight: 3 * 1200,
+			acked: []congestion.AckedPacketInfo{
+				{PacketNumber: congestion.PacketNumber(pns[0]), BytesAcked: 1200, ReceivedTime: ackTime},
+				{PacketNumber: congestion.PacketNumber(pns[1]), BytesAcked: 1200, ReceivedTime: ackTime},
+				{PacketNumber: congestion.PacketNumber(pns[2]), BytesAcked: 1200, ReceivedTime: ackTime},
+			},
+		}}, cc.events)
+		require.Zero(t, sph.bytesInFlight)
+	})
+
+	t.Run("declared lost after the probe", func(t *testing.T) {
+		sph, cc, pns, timeout := setup(t)
+		// Three probe packets later, an ACK for the last of them declares the
+		// first three packets lost by the packet threshold.
+		probes := send1RTTPackets(sph, timeout, 3)
+		ackTime := timeout.Add(time.Millisecond)
+		_, err := sph.ReceivedAck(&wire.AckFrame{AckRanges: ackRanges(probes...)}, protocol.Encryption1RTT, ackTime)
+		require.NoError(t, err)
+		require.Equal(t, []congestion.PacketNumber{congestion.PacketNumber(pns[0]), congestion.PacketNumber(pns[1]), congestion.PacketNumber(pns[2])}, cc.lost)
+		require.Len(t, cc.events, 1)
+		require.Equal(t, []congestion.LostPacketInfo{
+			{PacketNumber: congestion.PacketNumber(pns[0]), BytesLost: 1200},
+			{PacketNumber: congestion.PacketNumber(pns[1]), BytesLost: 1200},
+			{PacketNumber: congestion.PacketNumber(pns[2]), BytesLost: 1200},
+		}, cc.events[0].lost)
+		require.Zero(t, sph.bytesInFlight)
+	})
+}
