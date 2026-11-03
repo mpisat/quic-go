@@ -285,8 +285,9 @@ func TestSendStreamTryWriteAllAndClose(t *testing.T) {
 	require.NoError(t, str.TryWriteAllAndClose(data))
 	data[0] = 'x' // make sure the data was copied
 	require.ErrorIs(t, str.Context().Err(), context.Canceled)
+	require.ErrorIs(t, context.Cause(str.Context()), ErrStreamClosed)
 	_, err := str.Write([]byte("more"))
-	require.ErrorContains(t, err, "write on closed stream")
+	require.ErrorIs(t, err, ErrStreamClosed)
 
 	// The FIN is in the frame that carries the data, not in a frame of its own.
 	frame, _, hasMore := str.popStreamFrame(protocol.MaxByteCount, protocol.Version1)

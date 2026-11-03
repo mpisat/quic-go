@@ -192,7 +192,7 @@ func (s *SendStream) TryWriteAllAndClose(p []byte) error {
 		return err
 	}
 	s.sender.onHasStreamData(s.streamID, s) // the data and the FIN, must be called without holding the mutex
-	s.ctxCancel(nil)
+	s.ctxCancel(ErrStreamClosed)
 	return nil
 }
 
